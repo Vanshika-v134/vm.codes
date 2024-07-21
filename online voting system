@@ -1,0 +1,195 @@
+pip install Flask
+import sqlite3
+from flask import Flask
+
+app = Flask(__name__)
+app.secret_key = 'your_secret_key'
+
+# Connect to SQLite database
+conn = sqlite3.connect('voting.db', check_same_thread=False)
+cursor = conn.cursor()
+
+# Create tables
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY,
+        username TEXT NOT NULL,
+        password TEXT NOT NULL,
+        is_admin INTEGER NOT NULL
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS candidates (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        party TEXT NOT NULL
+    )
+''')
+
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS votes (
+        id INTEGER PRIMARY KEY,
+        user_id INTEGER,
+        candidate_id INTEGER,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(candidate_id) REFERENCES candidates(id)
+    )
+''')
+
+# Commit changes and close connection
+conn.commit()
+conn.close()
+from flask import render_template, request, redirect, session, flash
+import sqlite3
+import hashlib
+
+# Login route
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form['username']
+        password = hashlib.sha256(request.form['password'].encode()).hexdigest()
+
+        conn = sqlite3.connect('voting.db', check_same_thread=False)
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))
+        user = cursor.fetchone()
+        conn.close()
+
+        if user:
+            session['user_id'] = user[0]
+            session['username'] = user[1]
+            session['is_admin'] = user[3]
+            return redirect('/')
+        else:
+            flash('Invalid username or password', 'error')
+
+    return render_template('login.html')
+
+# Logout route
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect('/')
+
+# Example protected route
+@app.route('/admin')
+def admin():
+    if 'user_id' in session and session['is_admin']:
+        conn = sqlite3.connect('voting.db', check_same_thread=False)
+        cursor = conn.cursor()
+
+        cursor.execute('SELECT * FROM candidates')
+        candidates = cursor.fetchall()
+
+        cursor.execute('SELECT * FROM votes')
+        votes = cursor.fetchall()
+
+        conn.close()
+
+        return render_template('admin.html', candidates=candidates, votes=votes)
+    else:
+        return redirect('/login')
+# Example route for voting
+@app.route('/vote/<int:candidate_id>', methods=['POST'])
+def vote(candidate_id):
+    if 'user_id' in session:
+        user_id = session['user_id']
+
+        conn = sqlite3.connect('voting.db', check_same_thread=False)
+        cursor = conn.cursor()
+
+        # Check if the user has already voted
+        cursor.execute('SELECT * FROM votes WHERE user_id = ?', (user_id,))
+        existing_vote = cursor.fetchone()
+
+        if existing_vote:
+            flash('You have already voted.', 'error')
+        else:
+            # Insert the vote
+            cursor.execute('INSERT INTO votes (user_id, candidate_id) VALUES (?, ?)', (user_id, candidate_id))
+            conn.commit()
+            flash('Vote successful!', 'success')
+
+        conn.close()
+
+    return redirect('/')
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login</title>
+</head>
+<body>
+    <h2>Login</h2>
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            {% for message in messages %}
+                <div>{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    <form action="/login" method="post">
+        <label for="username">Username:</label><br>
+        <input type="text" id="username" name="username" required><br><br>
+        <label for="password">Password:</label><br>
+        <input type="password" id="password" name="password" required><br><br>
+        <button type="submit">Login</button>
+    </form>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+</head>
+<body>
+    <h2>Admin Dashboard</h2>
+    <p>Welcome, {{ session['username'] }}!</p>
+
+    <h3>Candidates</h3>
+    <ul>
+        {% for candidate in candidates %}
+            <li>{{ candidate[1] }} - {{ candidate[2] }}</li>
+        {% endfor %}
+    </ul>
+
+    <h3>Votes</h3>
+    <ul>
+        {% for vote in votes %}
+            <li>User {{ vote[1] }} voted for Candidate {{ vote[2] }}</li>
+        {% endfor %}
+    </ul>
+
+    <a href="/logout">Logout</a>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Online Voting System</title>
+</head>
+<body>
+    <h2>Online Voting System</h2>
+    {% if 'user_id' in session %}
+        <p>Welcome, {{ session['username'] }}!</p>
+        <form action="/vote/1" method="post">
+            <button type="submit">Vote for Candidate 1</button>
+        </form>
+        <form action="/vote/2" method="post">
+            <button type="submit">Vote for Candidate 2</button>
+        </form>
+        <!-- Add more forms/buttons for other candidates -->
+        <a href="/logout">Logout</a>
+    {% else %}
+        <p>Please <a href="/login">login</a> to vote.</p>
+    {% endif %}
+</body>
+</html>
